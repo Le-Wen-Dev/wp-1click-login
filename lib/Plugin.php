@@ -35,9 +35,10 @@ final class Plugin
     {
         $defaultPassword = $this->generatePassword();
         $sites = $this->loadSites();
-        $domains = $this->getDomains();
+        $domains = [];
 
         try {
+            $domains = $this->getDomains();
             if ($this->requestMethod() === 'POST') {
                 $action = (string) ($_POST['action'] ?? '');
                 if ($action === 'install') {
