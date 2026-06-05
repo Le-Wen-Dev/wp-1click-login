@@ -116,13 +116,13 @@ final class Plugin
         }
 
         $installDirInput = (string) ($_POST['install_dir'] ?? 'public_html');
-        $installDir = $this->validateInstallDir($installDirInput);
+        $installDir = $this->normalizeInstallDir($domain, $installDirInput);
         $siteTitle = $this->validateSiteTitle((string) ($_POST['site_title'] ?? ''));
         $adminUser = $this->validateWpUsername((string) ($_POST['admin_username'] ?? ''));
         $adminEmail = $this->validateEmail((string) ($_POST['admin_email'] ?? ''));
         $adminPassword = $this->validatePassword((string) ($_POST['admin_password'] ?? ''));
 
-        $domainRoot = '/home/' . $this->username . '/domains/' . $domain;
+        $domainRoot = $this->domainRoot($domain);
         if (!is_dir($domainRoot)) {
             throw new RuntimeException('Domain home directory was not found on disk.');
         }
@@ -142,7 +142,7 @@ final class Plugin
         $da = new DirectAdminClient($this->username, $this->logger);
         $da->createDatabase($dbBase, $dbBase, $dbPassword);
 
-        $siteUrl = 'https://' . $domain . $this->relativeUrlFromInstallDir($installDir);
+        $siteUrl = $this->buildSiteUrl($domain, $installDir);
         $wpCli = $this->resolveWpCli();
 
         $this->runWpCli($wpCli, ['core', 'download', '--path=' . $installPath, '--force']);
@@ -219,13 +219,22 @@ final class Plugin
 
     private function renderPage(array $domains, array $sites, string $defaultPassword, string $csrfToken): void
     {
-        $selectedDomain = $this->h((string) ($_POST['domain'] ?? ($domains[0] ?? '')));
-        $installDir = $this->h((string) ($_POST['install_dir'] ?? 'public_html'));
+        $selectedDomainRaw = (string) ($_POST['domain'] ?? ($domains[0] ?? ''));
+        $selectedDomain = $this->h($selectedDomainRaw);
+        $rawInstallDir = (string) ($_POST['install_dir'] ?? 'public_html');
+        try {
+            $normalizedInstallDir = $selectedDomainRaw !== '' ? $this->normalizeInstallDir($selectedDomainRaw, $rawInstallDir) : trim($rawInstallDir);
+        } catch (\Throwable $exception) {
+            $normalizedInstallDir = trim($rawInstallDir);
+        }
+        $installDir = $this->h($normalizedInstallDir);
         $siteTitle = $this->h((string) ($_POST['site_title'] ?? 'My WordPress Site'));
         $adminUser = $this->h((string) ($_POST['admin_username'] ?? $this->username . '_wpadmin'));
         $adminEmail = $this->h((string) ($_POST['admin_email'] ?? 'admin@' . ($domains[0] ?? 'example.com')));
         $defaultPassword = $this->h($defaultPassword);
         $pluginBase = '/CMD_PLUGINS/' . self::PLUGIN_NAME;
+        $targetUrlPreview = $selectedDomainRaw !== '' ? $this->h($this->buildSiteUrl($selectedDomainRaw, $normalizedInstallDir !== '' ? $normalizedInstallDir : 'public_html')) : '';
+        $targetPathPreview = $selectedDomainRaw !== '' ? $this->h($this->domainRoot($selectedDomainRaw) . '/' . ($normalizedInstallDir !== '' ? $normalizedInstallDir : 'public_html')) : '';
 
         echo '<!doctype html><html><head><meta charset="utf-8"><title>WP OneClick Installer</title>';
         echo '<style>';
@@ -275,7 +284,14 @@ final class Plugin
         echo '</select>';
 
         echo '<label for="install_dir">Install Directory</label>';
-        echo '<input id="install_dir" name="install_dir" value="' . $installDir . '" placeholder="public_html">';
+        echo '<input id="install_dir" name="install_dir" value="' . $installDir . '" placeholder="public_html/wp">';
+        echo '<p class="muted">Use <code>public_html</code> for the domain root, <code>public_html/wp</code> for a subfolder, or paste the full domain path and the plugin will normalize it.</p>';
+        if ($targetPathPreview !== '') {
+            echo '<p class="muted">Install path: <code>' . $targetPathPreview . '</code></p>';
+        }
+        if ($targetUrlPreview !== '') {
+            echo '<p class="muted">Target URL: <code>' . $targetUrlPreview . '</code></p>';
+        }
 
         echo '<label for="site_title">Site Title</label>';
         echo '<input id="site_title" name="site_title" value="' . $siteTitle . '">';
@@ -412,7 +428,7 @@ final class Plugin
         return $domain;
     }
 
-    private function validateInstallDir(string $path): string
+    private function normalizeInstallDir(string $domain, string $path): string
     {
         $path = trim($path);
         if ($path === '') {
@@ -420,6 +436,17 @@ final class Plugin
         }
 
         $path = preg_replace('#/+#', '/', $path) ?? '';
+        $path = trim($path);
+
+        $domainRoot = $this->domainRoot($domain);
+        $publicRoot = $domainRoot . '/public_html';
+
+        if ($this->startsWith($path, $publicRoot)) {
+            $path = 'public_html' . substr($path, strlen($publicRoot));
+        } elseif ($this->startsWith($path, $domainRoot . '/')) {
+            $path = substr($path, strlen($domainRoot . '/'));
+        }
+
         $path = trim($path, '/');
 
         if ($path === '' || $this->contains($path, '..')) {
@@ -505,6 +532,16 @@ final class Plugin
         $relative = preg_replace('#^public_html#', '', $installDir) ?? '';
         $relative = trim($relative, '/');
         return $relative === '' ? '/' : '/' . $relative . '/';
+    }
+
+    private function buildSiteUrl(string $domain, string $installDir): string
+    {
+        return 'https://' . $domain . $this->relativeUrlFromInstallDir($installDir);
+    }
+
+    private function domainRoot(string $domain): string
+    {
+        return '/home/' . $this->username . '/domains/' . $domain;
     }
 
     private function resolveWpCli(): array
