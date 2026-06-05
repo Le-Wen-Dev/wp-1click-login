@@ -27,6 +27,7 @@ wp_oneclick_installer/
 │   ├── Plugin.php
 │   └── TokenManager.php
 ├── scripts/
+│   ├── da_helper.sh
 │   ├── install.sh
 │   └── uninstall.sh
 ├── user/
@@ -53,8 +54,9 @@ At runtime the plugin also creates:
 - DirectAdmin installed at `/usr/local/directadmin`
 - PHP CLI available as `/usr/local/bin/php`
 - `curl`, `tar`, and `rsync`
+- `sudo` available for plugin helper execution
 - Outbound HTTPS access to download WP-CLI if `wp` is not already installed
-- DirectAdmin `da` binary available in `PATH`
+- Root install so the plugin can place `/etc/sudoers.d/wp-oneclick-installer`
 
 ## Install
 
@@ -103,9 +105,9 @@ This removes the plugin directory from DirectAdmin.
 
 ### WordPress install flow
 
-1. List current user domains through the DirectAdmin API, with a filesystem fallback.
+1. List current user domains from DirectAdmin user data files, with a sudo helper fallback.
 2. Validate the selected domain, install path, email, and admin username.
-3. Create a database via `CMD_API_DATABASES`.
+3. Create a database via a locked-down helper that calls `CMD_API_DATABASES` as root.
 4. Use system `wp` if present, otherwise download `wp-cli.phar`.
 5. Run:
    - `wp core download`
@@ -134,6 +136,7 @@ This removes the plugin directory from DirectAdmin.
 - CSRF protection uses a DirectAdmin-session-bound token file.
 - Installation path is restricted to `public_html` and child paths only.
 - Cross-user site access is blocked by owner checks in metadata.
+- Database creation is delegated only to `scripts/da_helper.sh` through a dedicated sudoers rule.
 
 ## Testing checklist
 

@@ -8,18 +8,31 @@ use RuntimeException;
 final class DirectAdminClient
 {
     private string $username;
+    private string $pluginRoot;
     private Logger $logger;
     private ?string $daBinary = null;
     private ?string $curlBinary = null;
+    private ?string $sudoBinary = null;
 
-    public function __construct(string $username, Logger $logger)
+    public function __construct(string $username, Logger $logger, ?string $pluginRoot = null)
     {
         $this->username = $username;
+        $this->pluginRoot = $pluginRoot ?? dirname(__DIR__);
         $this->logger = $logger;
     }
 
     public function getDomains(): array
     {
+        $domains = $this->getDomainsFromFilesystem();
+        if ($domains !== []) {
+            return $domains;
+        }
+
+        $domains = $this->getDomainsFromHelper();
+        if ($domains !== []) {
+            return $domains;
+        }
+
         $response = $this->apiGet('/CMD_API_SHOW_DOMAINS');
         if (is_array($response) && isset($response['list']) && is_array($response['list'])) {
             return array_values(array_filter(array_map('strval', $response['list'])));
@@ -35,6 +48,10 @@ final class DirectAdminClient
 
     public function createDatabase(string $database, string $dbUser, string $dbPassword): void
     {
+        if ($this->createDatabaseViaHelper($database, $dbUser, $dbPassword)) {
+            return;
+        }
+
         $response = $this->apiPost('/CMD_API_DATABASES', [
             'action' => 'create',
             'name' => $database,
@@ -103,6 +120,97 @@ final class DirectAdminClient
         throw new RuntimeException('DirectAdmin API returned an unreadable response.');
     }
 
+    private function getDomainsFromFilesystem(): array
+    {
+        $paths = [
+            '/usr/local/directadmin/data/users/' . $this->username . '/domains.list',
+            '/usr/local/directadmin/data/users/' . $this->username . '/domains/',
+        ];
+
+        foreach ($paths as $path) {
+            if (is_file($path) && is_readable($path)) {
+                $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+                $domains = array_values(array_filter(array_map('trim', $lines), static function (string $domain): bool {
+                    return $domain !== '';
+                }));
+                if ($domains !== []) {
+                    return $domains;
+                }
+            }
+        }
+
+        return [];
+    }
+
+    private function getDomainsFromHelper(): array
+    {
+        try {
+            $body = $this->runHelper(['list-domains', $this->username]);
+        } catch (RuntimeException $exception) {
+            $this->logger->log('domain_helper_failed', [
+                'username' => $this->username,
+                'error' => $exception->getMessage(),
+            ]);
+            return [];
+        }
+
+        $decoded = json_decode($body, true);
+        if (!is_array($decoded) || !isset($decoded['domains']) || !is_array($decoded['domains'])) {
+            return [];
+        }
+
+        return array_values(array_filter(array_map('strval', $decoded['domains'])));
+    }
+
+    private function createDatabaseViaHelper(string $database, string $dbUser, string $dbPassword): bool
+    {
+        try {
+            $body = $this->runHelper(['create-database', $this->username, $database, $dbUser, $dbPassword]);
+        } catch (RuntimeException $exception) {
+            $this->logger->log('db_helper_failed', [
+                'username' => $this->username,
+                'database' => $database,
+                'error' => $exception->getMessage(),
+            ]);
+            return false;
+        }
+
+        $decoded = json_decode($body, true);
+        if (!is_array($decoded)) {
+            throw new RuntimeException('Database helper returned an unreadable response.');
+        }
+
+        if (($decoded['ok'] ?? false) !== true) {
+            $message = (string) ($decoded['error'] ?? 'Unknown helper failure');
+            throw new RuntimeException('DirectAdmin database helper failed: ' . $message);
+        }
+
+        return true;
+    }
+
+    private function runHelper(array $arguments): string
+    {
+        $helper = $this->pluginRoot . '/scripts/da_helper.sh';
+        if (!is_file($helper)) {
+            throw new RuntimeException('DirectAdmin helper script is missing.');
+        }
+
+        $cmd = [$this->resolveSudoBinary(), '-n', $helper];
+        foreach ($arguments as $argument) {
+            $cmd[] = $argument;
+        }
+
+        $parts = array_map('escapeshellarg', $cmd);
+        $parts[] = '2>&1';
+        exec(implode(' ', $parts), $output, $exitCode);
+        $body = trim(implode("\n", $output));
+        if ($exitCode !== 0) {
+            throw new RuntimeException($body !== '' ? $body : 'Helper exited with a non-zero status.');
+        }
+
+        return $body;
+    }
+
     private function resolveDaBinary(): string
     {
         if ($this->daBinary !== null) {
@@ -146,5 +254,27 @@ final class DirectAdminClient
         }
 
         throw new RuntimeException('curl binary was not found in the plugin runtime environment.');
+    }
+
+    private function resolveSudoBinary(): string
+    {
+        if ($this->sudoBinary !== null) {
+            return $this->sudoBinary;
+        }
+
+        $candidates = [
+            trim((string) shell_exec('command -v sudo 2>/dev/null')),
+            '/usr/bin/sudo',
+            '/bin/sudo',
+        ];
+
+        foreach ($candidates as $candidate) {
+            if ($candidate !== '' && is_file($candidate) && is_executable($candidate)) {
+                $this->sudoBinary = $candidate;
+                return $candidate;
+            }
+        }
+
+        throw new RuntimeException('sudo binary was not found in the plugin runtime environment.');
     }
 }
