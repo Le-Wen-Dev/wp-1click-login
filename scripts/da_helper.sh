@@ -12,6 +12,11 @@ json_error() {
   exit 1
 }
 
+extract_api_url() {
+  raw="$1"
+  printf '%s\n' "$raw" | sed -n 's#.*\(https\{0,1\}://[^[:space:]]*\).*#\1#p' | head -n 1
+}
+
 require_valid_user() {
   case "$1" in
     ""|*[!A-Za-z0-9_.-]*)
@@ -71,7 +76,8 @@ case "$action" in
     require_valid_name "$db_user"
     [ -n "$db_password" ] || json_error "empty_password"
 
-    api_url="$("$DIRECTADMIN_BIN" api-url --user="$user" 2>/dev/null || true)"
+    api_raw="$("$DIRECTADMIN_BIN" api-url --user="$user" 2>/dev/null || true)"
+    api_url="$(extract_api_url "$api_raw")"
     [ -n "$api_url" ] || json_error "api_url_failed"
 
     body="$("$CURL_BIN" -fsSk \

@@ -48,7 +48,8 @@ final class DirectAdminClient
 
     public function createDatabase(string $database, string $dbUser, string $dbPassword): void
     {
-        if ($this->createDatabaseViaHelper($database, $dbUser, $dbPassword)) {
+        if ($this->helperAvailable()) {
+            $this->createDatabaseViaHelper($database, $dbUser, $dbPassword);
             return;
         }
 
@@ -162,7 +163,7 @@ final class DirectAdminClient
         return array_values(array_filter(array_map('strval', $decoded['domains'])));
     }
 
-    private function createDatabaseViaHelper(string $database, string $dbUser, string $dbPassword): bool
+    private function createDatabaseViaHelper(string $database, string $dbUser, string $dbPassword): void
     {
         try {
             $body = $this->runHelper(['create-database', $this->username, $database, $dbUser, $dbPassword]);
@@ -172,7 +173,7 @@ final class DirectAdminClient
                 'database' => $database,
                 'error' => $exception->getMessage(),
             ]);
-            return false;
+            throw new RuntimeException('DirectAdmin database helper failed: ' . $exception->getMessage());
         }
 
         $decoded = json_decode($body, true);
@@ -184,8 +185,6 @@ final class DirectAdminClient
             $message = (string) ($decoded['error'] ?? 'Unknown helper failure');
             throw new RuntimeException('DirectAdmin database helper failed: ' . $message);
         }
-
-        return true;
     }
 
     private function runHelper(array $arguments): string
@@ -209,6 +208,11 @@ final class DirectAdminClient
         }
 
         return $body;
+    }
+
+    private function helperAvailable(): bool
+    {
+        return is_file($this->pluginRoot . '/scripts/da_helper.sh');
     }
 
     private function resolveDaBinary(): string
