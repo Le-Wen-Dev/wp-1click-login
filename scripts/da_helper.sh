@@ -3,18 +3,19 @@ set -eu
 
 DIRECTADMIN_BIN="/usr/local/directadmin/directadmin"
 CURL_BIN="/usr/bin/curl"
+MYSQL_DEFAULTS="/usr/local/directadmin/conf/my.cnf"
+MYSQL_CONF="/usr/local/directadmin/conf/mysql.conf"
+MYSQL_BIN="/usr/bin/mysql"
 if [ ! -x "$CURL_BIN" ]; then
   CURL_BIN="/bin/curl"
+fi
+if [ ! -x "$MYSQL_BIN" ]; then
+  MYSQL_BIN="/bin/mysql"
 fi
 
 json_error() {
   printf '{"ok":false,"error":"%s"}\n' "$1"
   exit 1
-}
-
-extract_api_url() {
-  raw="$1"
-  printf '%s\n' "$raw" | sed -n 's#.*\(https\{0,1\}://[^[:space:]]*\).*#\1#p' | head -n 1
 }
 
 require_valid_user() {
@@ -43,6 +44,10 @@ require_valid_user "$user"
 caller="${SUDO_USER:-}"
 require_valid_user "$caller"
 [ "$caller" = "$user" ] || json_error "caller_user_mismatch"
+
+sql_escape() {
+  printf "%s" "$1" | sed "s/'/''/g"
+}
 
 case "$action" in
   list-domains)
@@ -75,32 +80,26 @@ case "$action" in
     require_valid_name "$database"
     require_valid_name "$db_user"
     [ -n "$db_password" ] || json_error "empty_password"
+    [ -r "$MYSQL_DEFAULTS" ] || json_error "mysql_defaults_unreadable"
+    [ -x "$MYSQL_BIN" ] || json_error "mysql_binary_missing"
 
-    api_raw="$("$DIRECTADMIN_BIN" api-url --user="$user" 2>/dev/null || true)"
-    api_url="$(extract_api_url "$api_raw")"
-    [ -n "$api_url" ] || json_error "api_url_failed"
+    db_sql_name="$(sql_escape "$database")"
+    db_sql_user="$(sql_escape "$db_user")"
+    db_sql_pass="$(sql_escape "$db_password")"
 
-    body="$("$CURL_BIN" -fsSk \
-      --data-urlencode "action=create" \
-      --data-urlencode "name=$database" \
-      --data-urlencode "user=$db_user" \
-      --data-urlencode "passwd=$db_password" \
-      --data-urlencode "passwd2=$db_password" \
-      "${api_url}/CMD_API_DATABASES" 2>&1 || true)"
+    sql="CREATE DATABASE IF NOT EXISTS \`$database\`;
+CREATE USER IF NOT EXISTS '$db_sql_user'@'localhost' IDENTIFIED BY '$db_sql_pass';
+GRANT ALL PRIVILEGES ON \`$database\`.* TO '$db_sql_user'@'localhost';
+FLUSH PRIVILEGES;"
 
-    case "$body" in
-      *"error=0"*|*"\"error\":\"0\""*)
-        printf '{"ok":true}\n'
-        ;;
-      "")
-        json_error "empty_directadmin_response"
-        ;;
-      *)
-        escaped_body=$(printf '%s' "$body" | tr '\n' ' ' | sed 's/"/\\"/g')
-        printf '{"ok":false,"error":"%s"}\n' "$escaped_body"
-        exit 1
-        ;;
-    esac
+    body="$("$MYSQL_BIN" --defaults-extra-file="$MYSQL_DEFAULTS" -NBe "$sql" 2>&1 || true)"
+    if [ -n "$body" ]; then
+      escaped_body=$(printf '%s' "$body" | tr '\n' ' ' | sed 's/"/\\"/g')
+      printf '{"ok":false,"error":"%s"}\n' "$escaped_body"
+      exit 1
+    fi
+
+    printf '{"ok":true,"db_name":"%s","db_user":"%s"}\n' "$database" "$db_user"
     ;;
   *)
     json_error "unsupported_action"
