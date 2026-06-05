@@ -422,7 +422,7 @@ final class Plugin
         $path = preg_replace('#/+#', '/', $path) ?? '';
         $path = trim($path, '/');
 
-        if ($path === '' || str_contains($path, '..')) {
+        if ($path === '' || $this->contains($path, '..')) {
             throw new RuntimeException('Install directory is invalid.');
         }
 
@@ -495,7 +495,7 @@ final class Plugin
     {
         $normalizedRoot = rtrim($domainRoot, '/');
         $normalizedPath = preg_replace('#/+#', '/', $installPath) ?? $installPath;
-        if (!str_starts_with($normalizedPath, $normalizedRoot . '/public_html')) {
+        if (!$this->startsWith($normalizedPath, $normalizedRoot . '/public_html')) {
             throw new RuntimeException('Installation path is outside the allowed public_html area.');
         }
     }
@@ -732,5 +732,15 @@ PHP;
     private function h(string $value): string
     {
         return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    }
+
+    private function contains(string $haystack, string $needle): bool
+    {
+        return $needle !== '' && strpos($haystack, $needle) !== false;
+    }
+
+    private function startsWith(string $haystack, string $prefix): bool
+    {
+        return strpos($haystack, $prefix) === 0;
     }
 }
